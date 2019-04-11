@@ -4,7 +4,7 @@
 
 int main(int argc, char * const argv[]) {
     int ec = 0, pid;
-    int foregound = 0;
+    int foreground = 0;
 
     pid = daemon_init(foreground, 0, 0);
     if (pid ==  0) { /* child process */
