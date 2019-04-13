@@ -17,6 +17,14 @@
 #include <netutils/netutils.h>
 #include <strutils.h>
 
+struct config {
+    char *ip;
+    int port;
+    /* long int max_connect; */ /* max connections */
+    unsigned int delay;
+    int workers;
+};
+
 /* #define BACKLOG 20 */
 #define BACKLOG SOMAXCONN
 
@@ -24,15 +32,11 @@
 
 int running = 1;
 
-unsigned long int connected = 0; /* number of connections */
-int worker = 0;                  /* set to 1 in worker process */
+int workers = 0; /* number of workers */
 
-struct config {
-    char *ip;
-    int port;
-    long int max_connect; /* max connections */
-    unsigned int delay;
-};
+pid_t *wpids = NULL;
+
+struct config conf;
 
 int server_session(int sess_fd, const char *ip, const u_short port,
                    const struct config *conf) {
@@ -53,71 +57,72 @@ int server_session(int sess_fd, const char *ip, const u_short port,
     close(sess_fd);
 }
 
-int loop_fork(int srv_fd, const struct config *conf) {
-    int ec = 0;
-    SA_IN client_addr;
-    socklen_t client_addr_len = sizeof(client_addr);
-    char ipbuf[INET_ADDRSTRLEN];
-    while (running) {
-        int sess_fd = accept(srv_fd, (SA *)&client_addr, &client_addr_len);
-        if (sess_fd == -1) {
-            if (errno != EINTR)
-                _LOG_ERROR_ERRNO(root_logger, "%s on socket %d: %s", errno,
-                                 "accept", srv_fd);
-            continue;
-        }
-        if (running == 0)
-            break;
+pid_t loop_child(int srv_fd, const struct config *conf) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        int ec = 0;
+        SA_IN client_addr;
+        socklen_t client_addr_len = sizeof(client_addr);
+        char ipbuf[INET_ADDRSTRLEN];
+        workers = -1; /* set to -1 in worker */
+        while (running) {
+            int sess_fd = accept(srv_fd, (SA *) &client_addr, &client_addr_len);
+            if (sess_fd == -1) {
+                if (errno != EINTR)
+                    _LOG_ERROR_ERRNO(root_logger, "%s on socket %d: %s", errno,
+                                     "accept", srv_fd);
+                continue;
+            }
+            if (running == 0)
+                break;
 
-        /* Format client IP address */
-        if (getnameinfo((SA *)&client_addr, client_addr_len, ipbuf,
-                        INET_ADDRSTRLEN, 0, 0, NI_NUMERICHOST) == 0) {
-            _LOG_INFO(root_logger, "connect from %s:%d", ipbuf,
-                      client_addr.sin_port);
-        } else {
-            _LOG_ERROR(root_logger, "invalid address for socket %d", sess_fd);
-        }
-        if (connected >= conf->max_connect) {
-            const char *buf = "Too many connections\n";
-            send(sess_fd, buf, strlen(buf), MSG_NOSIGNAL);
-            close(sess_fd);
-            _LOG_ERROR(root_logger, "%s", "too many connections");
-            continue;
-        }
+            /* Format client IP address */
+            if (getnameinfo((SA *) &client_addr, client_addr_len, ipbuf,
+                            INET_ADDRSTRLEN, 0, 0, NI_NUMERICHOST) == 0) {
+                _LOG_INFO(root_logger, "connect from %s:%d", ipbuf,
+                          client_addr.sin_port);
+            } else {
+                _LOG_ERROR(root_logger, "invalid address for socket %d",
+                           sess_fd);
+            }
+            /*
+            if (connected >= conf->max_connect) {
+                const char *buf = "Too many connections\n";
+                send(sess_fd, buf, strlen(buf), MSG_NOSIGNAL);
+                close(sess_fd);
+                _LOG_ERROR(root_logger, "%s", "too many connections");
+                continue;
+            }
+            */
 
-        pid_t pid = fork();
-        if (pid == -1) {
-            _LOG_ERROR_ERRNO(root_logger,
-                             "fork on client connection from %s:%d: %s", errno,
-                             ipbuf, client_addr.sin_port);
-        } else if (pid == 0) {
-            /* child process */
-            worker = 1;
-            close(srv_fd);
             server_session(sess_fd, ipbuf, client_addr.sin_port, conf);
-            exit(0);
         }
-        connected++;
-        close(sess_fd);
+        exit(0);
+    } else if (pid < 0) {
+        _LOG_ERROR_ERRNO(root_logger, "%s: %s", errno, "fork worker");
     }
-EXIT:
-
-    return ec;
+    return pid;
 }
 
 int start_server(const struct config *conf) {
     int ec = 0;
     int srv_fd; /* server socket */
     SA_IN srv_addr;
+    int reuse = 1;
+    int status;
+    pid_t wpid;
+    wpids = (pid_t *) calloc(sizeof(pid_t), conf->workers);
+    if (wpids == NULL) {
+        _LOG_ERROR(root_logger, "%s", "alloc workers");
+        return -1;
+    }
 
     if ((srv_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
         ec = -1;
         _LOG_ERROR_ERRNO(root_logger, "%s: %s", errno, "socket");
         goto EXIT;
     }
-    /*
     set_reuseaddr(srv_fd);
-    */
 
     srv_addr.sin_family = AF_INET;
     srv_addr.sin_port = htons(conf->port);
@@ -129,7 +134,7 @@ int start_server(const struct config *conf) {
         goto EXIT;
     }
 
-    if (bind(srv_fd, (SA *)&srv_addr, sizeof(srv_addr)) == -1) {
+    if (bind(srv_fd, (SA *) &srv_addr, sizeof(srv_addr)) == -1) {
         ec = -1;
         _LOG_ERROR_ERRNO(root_logger, "%s: %s", errno, "bind");
         goto EXIT;
@@ -145,34 +150,89 @@ int start_server(const struct config *conf) {
 
     _LOG_NOTICE(root_logger, "%s", "startup");
 
-    ec = loop_fork(srv_fd, conf);
+    /* run workers */
+    if (workers < conf->workers) {
+        for (int i = 0; i < conf->workers; i++) {
+            wpids[i] = loop_child(srv_fd, conf);
+            if (wpids[i] < 0) {
+                ec = -1;
+                running = 0;
+                break;
+            }
+            workers++;
+        }
+    }
 
+    /* respawn died workers */
+    while (running) {
+        if (workers < conf->workers) {
+            if (running) {
+                 _LOG_WARN(root_logger, "%s", "worker died");
+            } else {
+                _LOG_NOTICE(root_logger, "%s", "worker exited");
+            }
+
+            for (int i = 0; i < conf->workers; i++) {
+                if (wpids[i] == wpid) {
+                    if (running == 0) {
+                        wpids[i] = 0;
+                        break;
+                    }
+                    wpids[i] = loop_child(srv_fd, conf);
+                    if (wpids[i] < 0) {
+                        ec = -1;
+                        workers--;
+                        if (workers <= 0)
+                            break;
+                    } else
+                        _LOG_INFO(root_logger, "%s", "worker started");
+                }
+            }
+        }
+    }
 EXIT:
+    while (wait(&status) > 0) {
+    }
     if (srv_fd)
         close(srv_fd);
-    if (ec)
+    free(wpids);
+    if (ec) {
         _LOG_NOTICE(root_logger, "%s", "shutdown with error");
+    }  else {
+        _LOG_NOTICE(root_logger, "%s", "shutdown");
+    }
     return ec;
 }
 
 void app_shutdown() {
     running = 0;
-    if (!worker)
+    if (workers >= 0) {
         _LOG_NOTICE(root_logger, "%s", "shutdown initiate");
-    if (connected > 0)
+        for (int i = 0; i < conf.workers; i++) {
+            if (wpids[i] > 0) {
+                kill(wpids[i], SIGTERM);
+            }
+        }
+    } else {
+        /* exit worker */
         sleep(10);
-    else
-        sleep(1);
-    if (!worker)
-        _LOG_NOTICE(root_logger, "%s", "shutdown");
-    exit(0);
+        exit(0);
+    }
 }
 
 void handle_sigchld() {
-    while (waitpid((pid_t)(-1), 0, WNOHANG) > 0) {
-        if (connected > 0)
-            connected--;
+    pid_t pid;
+    while ((pid = waitpid((pid_t)(-1), 0, WNOHANG)) > 0) {
+        if (pid > 0) {
+            workers--;
+            for (int i = 0; i < conf.workers; i++) {
+                if (wpids[i] == pid) {
+                    wpids[i] = 0;
+                }
+            }
+        }
     }
+    workers--;
 }
 
 void sig_handler(int sig) {
@@ -265,7 +325,7 @@ void usage(const char *name) {
             "\t-a | --address <LISTEN_ADDRESS> (default all)\n"
             "\t-p | --port <LISTEN_PORT> (default 1234)\n"
             "\t-d | --delay <DELAY> (default 0)\n"
-            "\t-m | --max <MAX_CONNECTIONS> (default unlimited)\n");
+            "\t-w | --workers <WORKERS> (default 2)\n");
     exit(1);
 }
 
@@ -274,16 +334,16 @@ int main(int argc, char *const argv[]) {
     int background = 0;
     int closefds = FD_NOCLOSE;
     const char *name = "hellosrv";
-    struct config conf;
     conf.ip = NULL;
     conf.port = 1234;
-    conf.max_connect = INT_MAX;
+    conf.workers = 2;
+    /* conf.max_connect = INT_MAX; */
     conf.delay = 0;
 
     int opt = 0;
     int opt_idx = 0;
 
-    const char *opts = "hba:p:m:d:";
+    const char *opts = "hba:p:w:d:";
     const struct option long_opts[] = {
         /* Use flags like so:
         {"verbose",	no_argument,	&verbose_flag, 'V'}*/
@@ -291,9 +351,9 @@ int main(int argc, char *const argv[]) {
         {"help", no_argument, 0, 'h'},
         {"background", no_argument, 0, 'b'},
         {"address", required_argument, 0, 'a'},
-        {"port", required_argument, 0, 'p'},
+        {"port", optional_argument, 0, 'p'},
         {"delay", required_argument, 0, 'd'},
-        {"max", required_argument, 0, 'm'},
+        {"workers", required_argument, 0, 'w'},
         {0, 0, 0, 0}};
 
     while ((opt = getopt_long(argc, argv, opts, long_opts, &opt_idx)) != -1) {
@@ -321,18 +381,16 @@ int main(int argc, char *const argv[]) {
                 fprintf(stderr, "invalid delay: %s\n", optarg);
                 return -1;
             } else {
-                conf.delay = (unsigned int)n;
+                conf.delay = (unsigned int) n;
             }
             break;
         }
-        case 'm': {
+        case 'w': {
             char *endptr;
-            long int n = str2l(optarg, &endptr, 10);
-            if (errno || n <= 0 || n > INT_MAX) {
-                fprintf(stderr, "invalid max_connect: %s\n", optarg);
+            conf.workers = atoi(optarg);
+            if (conf.workers <= 0 || conf.workers > 8) {
+                fprintf(stderr, "invalid workers: %s\n", optarg);
                 return -1;
-            } else {
-                conf.max_connect = (unsigned long int)n;
             }
             break;
         }

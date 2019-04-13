@@ -13,5 +13,5 @@
 ----------------------------------
 Реализации
 
-hellosrv - process-per-request model
-
+hellosrv       process-per-request model
+hellosrv-wrk   preforked workers model
