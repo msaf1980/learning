@@ -1,9 +1,12 @@
-#include <arpa/inet.h>
+#include <limits.h>
 #include <errno.h>
+#include <getopt.h>
+#include <inttypes.h>
 #include <netdb.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -12,6 +15,7 @@
 #include <daemonutils.h>
 #include <logutils/syslogutils.h>
 #include <netutils/netutils.h>
+#include <strutils.h>
 
 /* #define BACKLOG 20 */
 #define BACKLOG SOMAXCONN
@@ -20,15 +24,18 @@
 
 int running = 1;
 
-int connected = 0;
+unsigned long int connected = 0; /* number of connections */
+int worker = 0;                  /* set to 1 in worker process */
 
 struct config {
     char *ip;
     int port;
-    int max_connect;
+    long int max_connect; /* max connections */
+    unsigned int delay;
 };
 
-int server_session(int sess_fd, const char *ip, const u_short port) {
+int server_session(int sess_fd, const char *ip, const u_short port,
+                   const struct config *conf) {
     char buf[BUFSIZE];
     strcpy(buf, "Hi there!\n");
     ssize_t len = strlen(buf);
@@ -39,7 +46,7 @@ int server_session(int sess_fd, const char *ip, const u_short port) {
                              ip, port);
             break;
         }
-        sleep(1);
+        sleep(conf->delay);
     }
     /* _LOG_INFO(root_logger, "close client connection from %s:%d", ip, port);
      */
@@ -70,6 +77,7 @@ int loop_fork(int srv_fd, const struct config *conf) {
         if (connected >= conf->max_connect) {
             const char *buf = "Too many connections\n";
             send(sess_fd, buf, strlen(buf), MSG_NOSIGNAL);
+            close(sess_fd);
             _LOG_ERROR(root_logger, "%s", "too many connections");
             continue;
         }
@@ -81,8 +89,9 @@ int loop_fork(int srv_fd, const struct config *conf) {
                              ipbuf, client_addr.sin_port);
         } else if (pid == 0) {
             /* child process */
+            worker = 1;
             close(srv_fd);
-            server_session(sess_fd, ipbuf, client_addr.sin_port);
+            server_session(sess_fd, ipbuf, client_addr.sin_port, conf);
             exit(0);
         }
         connected++;
@@ -117,7 +126,7 @@ int start_server(const struct config *conf) {
 
     if (bind(srv_fd, (SA *)&srv_addr, sizeof(srv_addr)) == -1) {
         ec = EXIT_FAILURE;
-        _LOG_ERROR_ERRNO(root_logger, "%s: %", errno, "bind");
+        _LOG_ERROR_ERRNO(root_logger, "%s: %s", errno, "bind");
         goto EXIT;
     }
 
@@ -125,7 +134,7 @@ int start_server(const struct config *conf) {
 
     if (listen(srv_fd, BACKLOG) == -1) {
         ec = EXIT_FAILURE;
-        _LOG_ERROR_ERRNO(root_logger, "%s: %", errno, "listen");
+        _LOG_ERROR_ERRNO(root_logger, "%s: %s", errno, "listen");
         goto EXIT;
     }
 
@@ -134,15 +143,21 @@ int start_server(const struct config *conf) {
     ec = loop_fork(srv_fd, conf);
 
 EXIT:
-    _LOG_NOTICE(root_logger, "%s", "shutdown");
+    if (ec)
+        _LOG_NOTICE(root_logger, "%s", "shutdown with error");
     return ec;
 }
 
 void app_shutdown() {
     running = 0;
-    _LOG_NOTICE(root_logger, "%s", "shutdown initiate");
-    sleep(10);
-    _LOG_NOTICE(root_logger, "%s", "shutdown");
+    if (!worker)
+        _LOG_NOTICE(root_logger, "%s", "shutdown initiate");
+    if (connected > 0)
+        sleep(10);
+    else
+        sleep(1);
+    if (!worker)
+        _LOG_NOTICE(root_logger, "%s", "shutdown");
     exit(0);
 }
 
@@ -221,11 +236,12 @@ int sig_handlers_init() {
 
     /* SIGCHLD for cleanup zombie child processes */
     if (sigaction(SIGCHLD, &sa, NULL) == -1) {
-            perror("Cannot handle SIGCHLD");
-            ec = 1;
+        perror("Cannot handle SIGCHLD");
+        ec = 1;
     }
 
-    /* Ignore SIGICHLD for auto-cleanup zombie child processes, if don't need custom handler */
+    /* Ignore SIGICHLD for auto-cleanup zombie child processes, if don't need
+     * custom handler */
     /*
     if (sigaction(SIGCHLD, &(struct sigaction){SIG_IGN}, NULL) == -1) {
         perror("Error: cannot handle SIGCHLD");
@@ -239,12 +255,89 @@ int sig_handlers_init() {
 int main(int argc, char *const argv[]) {
     int ec = 0, pid;
     int background = 0;
-    int closefd = FD_NOCLOSE;
+    int closefds = FD_NOCLOSE;
     const char *name = "hellosrv";
     struct config conf;
     conf.ip = NULL;
     conf.port = 1234;
-    conf.max_connect = 1000;
+    conf.max_connect = INT_MAX;
+    conf.delay = 0;
+
+    int opt = 0;
+    int opt_idx = 0;
+
+    const char *opts = "vhba:p:m:d:";
+    const struct option long_opts[] = {
+        /* Use flags like so:
+        {"verbose",	no_argument,	&verbose_flag, 'V'}*/
+        /* Argument styles: no_argument, required_argument, optional_argument */
+        {"version", no_argument, 0, 'v'},
+        {"help", no_argument, 0, 'h'},
+        {"background", no_argument, 0, 'b'},
+        {"port", optional_argument, 0, 'p'},
+        {"delay", required_argument, 0, 'd'},
+        {0, 0, 0, 0}};
+
+    while ((opt = getopt_long(argc, argv, opts, long_opts, &opt_idx)) != -1) {
+        switch (opt) {
+        case 'v':
+
+            break;
+        case 'h':
+
+            break;
+        case 'b':
+            background = 1;
+            break;
+        case 'a':
+            conf.ip = optarg;
+            break;
+        case 'p':
+            conf.port = atoi(optarg);
+            if (conf.port <= 0) {
+                fprintf(stderr, "invalid port: %s\n", optarg);
+                return EXIT_FAILURE;
+            }
+            break;
+        case 'd': {
+            char *endptr;
+            long int n = str2l(optarg, &endptr, 10);
+            if (errno || n < 0 || n > 30) {
+                fprintf(stderr, "invalid delay: %s\n", optarg);
+                return EXIT_FAILURE;
+            } else {
+                conf.delay = (unsigned int)n;
+            }
+            break;
+        }
+        case 'm': {
+            char *endptr;
+            long int n = str2l(optarg, &endptr, 10);
+            if (errno || n <= 0 || n > INT_MAX) {
+                fprintf(stderr, "invalid max_connect: %s\n", optarg);
+                return EXIT_FAILURE;
+            } else {
+                conf.max_connect = (unsigned long int)n;
+            }
+            break;
+        }
+        case 0: /* binded option, set by getopt */
+            break;
+        case '?':
+            /* getopt_long will have already printed an error */
+            return EXIT_FAILURE;
+        default:
+            /* Not sure how to get here... */
+            return EXIT_FAILURE;
+        }
+    }
+    if (optind < argc) {
+        fprintf(stderr, "Non-option arguments: ");
+        while (optind < argc)
+            fprintf(stderr, "%s ", argv[optind++]);
+        fprintf(stderr, "\n");
+        return EXIT_FAILURE;
+    }
 
     if (sig_handlers_init()) {
         ec = 1;
@@ -254,15 +347,28 @@ int main(int argc, char *const argv[]) {
     openlog(name, LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL0);
 
     if (background)
-        closefd = FD_CLOSE_STD;
+        closefds = FD_CLOSE_STD;
 
-    pid = daemon_init(background, 1, closefd);
+    pid = daemon_init(background, 1, closefds);
     if (pid == 0) { /* child process */
         ec = start_server(&conf);
     } else if (pid < 0) {
         _LOG_ERROR_ERRNO(root_logger, "%s: %s", errno, "fork");
         ec = EXIT_FAILURE;
+    } else { /* parent, check child status */
+        int wstatus;
+        if (waitpid(pid, &wstatus, WNOHANG) != 0) {
+            ec = EXIT_FAILURE;
+            perror("check forked process");
+        } else {
+            if (WIFEXITED(wstatus) || WIFSIGNALED(wstatus)) {
+                ec = EXIT_FAILURE;
+            }
+        }
     }
 EXIT:
+    if (ec) {
+        fprintf(stderr, "exit with error, check log\n");
+    }
     return ec;
 }
