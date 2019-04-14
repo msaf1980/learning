@@ -32,7 +32,8 @@ struct config {
 
 int running = 1;
 
-int workers = 0; /* number of workers */
+int workers = 0;     /* number of workers */
+int worker_died = 0; /* set to 1 in signal handler if worker died */
 
 pid_t *wpids = NULL;
 
@@ -165,29 +166,31 @@ int start_server(const struct config *conf) {
 
     /* respawn died workers */
     while (running) {
-        if (workers < conf->workers) {
+        if (worker_died) {
             if (running) {
-                 _LOG_WARN(root_logger, "%s", "worker died");
-            } else {
-                _LOG_NOTICE(root_logger, "%s", "worker exited");
+                _LOG_WARN(root_logger, "%s", "worker died");
             }
-
+            worker_died = 0;
             for (int i = 0; i < conf->workers; i++) {
-                if (wpids[i] == wpid) {
+                if (wpids[i] <= 0) {
                     if (running == 0) {
-                        wpids[i] = 0;
                         break;
                     }
                     wpids[i] = loop_child(srv_fd, conf);
                     if (wpids[i] < 0) {
                         ec = -1;
                         workers--;
+                        _LOG_INFO(root_logger, "%s", "worker start faled");
                         if (workers <= 0)
                             break;
-                    } else
+                    } else {
                         _LOG_INFO(root_logger, "%s", "worker started");
+                        workers++;
+                    }
                 }
             }
+        } else {
+            sleep(1);
         }
     }
 EXIT:
@@ -198,7 +201,7 @@ EXIT:
     free(wpids);
     if (ec) {
         _LOG_NOTICE(root_logger, "%s", "shutdown with error");
-    }  else {
+    } else {
         _LOG_NOTICE(root_logger, "%s", "shutdown");
     }
     return ec;
@@ -215,20 +218,28 @@ void app_shutdown() {
         }
     } else {
         /* exit worker */
-        sleep(10);
+        sleep(1);
         exit(0);
     }
 }
 
 void handle_sigchld() {
     pid_t pid;
-    while ((pid = waitpid((pid_t)(-1), 0, WNOHANG)) > 0) {
+    int wstatus;
+    while ((pid = waitpid((pid_t)(-1), &wstatus, WNOHANG)) > 0) {
         if (pid > 0) {
-            workers--;
             for (int i = 0; i < conf.workers; i++) {
                 if (wpids[i] == pid) {
                     wpids[i] = 0;
                 }
+            }
+            worker_died = 1;
+            if (WIFEXITED(wstatus)) {
+                _LOG_ERROR(root_logger, "worker exited with status %d",
+                           WEXITSTATUS(wstatus));
+            } else if (WIFSIGNALED(wstatus)) {
+                _LOG_ERROR(root_logger, "worker killed with signal '%s'",
+                           strsignal(WTERMSIG(wstatus)));
             }
         }
     }
