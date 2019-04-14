@@ -1,6 +1,6 @@
 cmake_minimum_required( VERSION 3.5 )
 
-project( asrosrv )
+project( asrolog )
 
 set( DIR_SOURCES src )
 set( DIR_INCLUDES includes )
@@ -11,6 +11,7 @@ set( DIR_C_PROCS ~/workspace/lib/c/c_procs )
 include_directories( ${DIR_C_PROCS}/include )
 
 set( SOURCES_C_PROCS
+    ${DIR_C_PROCS}/src/strutils.c
     ${DIR_C_PROCS}/src/daemonutils.c
 )
 
@@ -30,13 +31,14 @@ if ( DEFINED DIR_INCLUDES AND IS_DIRECTORY ${DIR_INCLUDES} )
     include_directories( include )
 endif()
 
-#Scan dir for standart source files
-aux_source_directory( ${DIR_SOURCES} SOURCES )
+set( SOURCES_SRV
+	${DIR_SOURCES}/astrosrv.c
+)
 
 add_library( c_procs STATIC ${SOURCES_C_PROCS} )
 
 # Add executable target
-add_executable( astrosrv ${SOURCES} )
+add_executable( astrosrv ${SOURCES_SRV} )
 
 target_link_libraries(  astrosrv ${LIBRARIES} )
 

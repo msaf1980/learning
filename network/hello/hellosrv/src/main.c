@@ -1,4 +1,3 @@
-#include <arpa/inet.h>
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
@@ -7,6 +6,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -66,8 +66,6 @@ int loop_fork(int srv_fd, const struct config *conf) {
                                  "accept", srv_fd);
             continue;
         }
-        if (running == 0)
-            break;
 
         /* Format client IP address */
         if (getnameinfo((SA *)&client_addr, client_addr_len, ipbuf,
@@ -101,7 +99,7 @@ int loop_fork(int srv_fd, const struct config *conf) {
         close(sess_fd);
     }
 EXIT:
-
+    close(srv_fd);
     return ec;
 }
 
@@ -148,8 +146,6 @@ int start_server(const struct config *conf) {
     ec = loop_fork(srv_fd, conf);
 
 EXIT:
-    if (srv_fd)
-        close(srv_fd);
     if (ec)
         _LOG_NOTICE(root_logger, "%s", "shutdown with error");
     return ec;
@@ -311,7 +307,7 @@ int main(int argc, char *const argv[]) {
             conf.port = atoi(optarg);
             if (conf.port <= 0) {
                 fprintf(stderr, "invalid port: %s\n", optarg);
-                return -1;
+                return EXIT_FAILURE;
             }
             break;
         case 'd': {
@@ -319,7 +315,7 @@ int main(int argc, char *const argv[]) {
             long int n = str2l(optarg, &endptr, 10);
             if (errno || n < 0 || n > 30) {
                 fprintf(stderr, "invalid delay: %s\n", optarg);
-                return -1;
+                return EXIT_FAILURE;
             } else {
                 conf.delay = (unsigned int)n;
             }
@@ -330,7 +326,7 @@ int main(int argc, char *const argv[]) {
             long int n = str2l(optarg, &endptr, 10);
             if (errno || n <= 0 || n > INT_MAX) {
                 fprintf(stderr, "invalid max_connect: %s\n", optarg);
-                return -1;
+                return EXIT_FAILURE;
             } else {
                 conf.max_connect = (unsigned long int)n;
             }
@@ -351,7 +347,7 @@ int main(int argc, char *const argv[]) {
         while (optind < argc)
             fprintf(stderr, "%s ", argv[optind++]);
         fprintf(stderr, "\n");
-        return -1;
+        return EXIT_FAILURE;
     }
 
     if (sig_handlers_init()) {
@@ -369,20 +365,20 @@ int main(int argc, char *const argv[]) {
         ec = start_server(&conf);
     } else if (pid < 0) {
         _LOG_ERROR_ERRNO(root_logger, "%s: %s", errno, "fork");
-        ec = -1;
+        ec = EXIT_FAILURE;
     } else { /* parent, check child status */
         int wstatus;
         if (waitpid(pid, &wstatus, WNOHANG) != 0) {
-            ec = -1;
+            ec = EXIT_FAILURE;
             perror("check forked process");
         } else {
             if (WIFEXITED(wstatus) || WIFSIGNALED(wstatus)) {
-                ec = -1;
+                ec = EXIT_FAILURE;
             }
         }
     }
 EXIT:
-    if (ec) {
+    if (ec != 0) {
         fprintf(stderr, "exit with error, check log\n");
     }
     return ec;
