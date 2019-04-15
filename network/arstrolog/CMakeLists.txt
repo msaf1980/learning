@@ -26,10 +26,10 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 
-if ( DEFINED DIR_INCLUDES AND IS_DIRECTORY ${DIR_INCLUDES} )
+#if ( DEFINED DIR_INCLUDES AND IS_DIRECTORY ${DIR_INCLUDES} )
     # Includes in separate directory
-    include_directories( include )
-endif()
+include_directories( SYSTEM include )
+	#endif()
 
 set( SOURCES_SRV
 	${DIR_SOURCES}/astrosrv.c

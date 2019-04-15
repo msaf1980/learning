@@ -20,7 +20,9 @@
 /* #define BACKLOG 20 */
 #define BACKLOG SOMAXCONN
 
-#define BUFSIZE 4096
+#define RESPSIZE 80
+#define REQSIZE  22
+
 
 int running = 1;
 
@@ -29,9 +31,45 @@ struct config {
     int port;
 };
 
+enum SESS_STATE {SESS_INIT = 0, SESS_CLIENT = 1, SESS_STAR = 2, SESS_ERR = -1 };
+
+void *root_logger;
+
+int session_start(int sess_fd, const char *ip, const u_short port,
+                   char *buf) {
+    size_t n = recv(sess_fd, buf, 22, MSG_NOSIGNAL);
+    if (n > 0)
+        buf[n] = '\0';
+    if (n != REQSIZE) {
+        if (n < 0) {
+            _LOG_ERROR_ERRNO(root_logger,
+                             "recv on client connection from %s:%d: %s", errno,
+                             ip, port);
+        } else {
+            _LOG_ERROR(root_logger, "length error for %s:%d: %s", ip, port, buf);
+        }
+        return SESS_ERR;
+    }
+}
+
 int server_session(int sess_fd, const char *ip, const u_short port,
                    const struct config *conf) {
-    char buf[BUFSIZE];
+    char buf[RESPSIZE+1];
+    int status = SESS_INIT;
+
+    while (running) {
+        if (status == SESS_INIT) {
+            status = session_start(sess_fd, ip, port, buf);
+            if (status == SESS_CLIENT) {
+
+            } else if (status == SESS_STAR) {
+
+            } else
+                break;
+        }
+    }
+
+    /*
     strcpy(buf, "Hi there!\n");
     ssize_t len = strlen(buf);
     for (int i = 0; i < 5; i++) {
@@ -42,6 +80,7 @@ int server_session(int sess_fd, const char *ip, const u_short port,
             break;
         }
     }
+    */
     /* _LOG_INFO(root_logger, "close client connection from %s:%d", ip, port);
      */
     close(sess_fd);
