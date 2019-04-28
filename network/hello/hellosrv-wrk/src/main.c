@@ -118,7 +118,7 @@ int start_server(const struct config *conf) {
         return -1;
     }
 
-    if ((srv_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+    if ((srv_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)) == -1) {
         ec = -1;
         _LOG_ERROR_ERRNO(root_logger, "%s: %s", errno, "socket");
         goto EXIT;

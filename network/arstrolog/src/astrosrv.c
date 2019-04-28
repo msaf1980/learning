@@ -1,3 +1,4 @@
+#include <arpa/inet.h>
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
@@ -6,7 +7,6 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -21,8 +21,7 @@
 #define BACKLOG SOMAXCONN
 
 #define RESPSIZE 80
-#define REQSIZE  22
-
+#define REQSIZE 22
 
 int running = 1;
 
@@ -31,12 +30,16 @@ struct config {
     int port;
 };
 
-enum SESS_STATE {SESS_INIT = 0, SESS_CLIENT = 1, SESS_STAR = 2, SESS_ERR = -1 };
+enum SESS_STATE {
+    SESS_INIT = 0,
+    SESS_CLIENT = 1,
+    SESS_STAR = 2,
+    SESS_ERR = -1
+};
 
 void *root_logger;
 
-int session_start(int sess_fd, const char *ip, const u_short port,
-                   char *buf) {
+int session_start(int sess_fd, const char *ip, const u_short port, char *buf) {
     size_t n = recv(sess_fd, buf, 22, MSG_NOSIGNAL);
     if (n > 0)
         buf[n] = '\0';
@@ -46,7 +49,8 @@ int session_start(int sess_fd, const char *ip, const u_short port,
                              "recv on client connection from %s:%d: %s", errno,
                              ip, port);
         } else {
-            _LOG_ERROR(root_logger, "length error for %s:%d: %s", ip, port, buf);
+            _LOG_ERROR(root_logger, "length error for %s:%d: %s", ip, port,
+                       buf);
         }
         return SESS_ERR;
     }
@@ -54,7 +58,7 @@ int session_start(int sess_fd, const char *ip, const u_short port,
 
 int server_session(int sess_fd, const char *ip, const u_short port,
                    const struct config *conf) {
-    char buf[RESPSIZE+1];
+    char buf[RESPSIZE + 1];
     int status = SESS_INIT;
 
     while (running) {
@@ -92,7 +96,7 @@ int listener_loop(int srv_fd, const struct config *conf) {
     socklen_t client_addr_len = sizeof(client_addr);
     char ipbuf[INET_ADDRSTRLEN];
     while (running) {
-        int sess_fd = accept(srv_fd, (SA *)&client_addr, &client_addr_len);
+        int sess_fd = accept(srv_fd, (SA *) &client_addr, &client_addr_len);
         if (sess_fd == -1) {
             if (errno != EINTR)
                 _LOG_ERROR_ERRNO(root_logger, "%s on socket %d: %s", errno,
@@ -101,7 +105,7 @@ int listener_loop(int srv_fd, const struct config *conf) {
         }
 
         /* Format client IP address */
-        if (getnameinfo((SA *)&client_addr, client_addr_len, ipbuf,
+        if (getnameinfo((SA *) &client_addr, client_addr_len, ipbuf,
                         INET_ADDRSTRLEN, 0, 0, NI_NUMERICHOST) == 0) {
             _LOG_INFO(root_logger, "connect from %s:%d", ipbuf,
                       client_addr.sin_port);
@@ -120,7 +124,7 @@ int start_server(const struct config *conf) {
     int srv_fd; /* server socket */
     SA_IN srv_addr;
 
-    if ((srv_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+    if ((srv_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)) == -1) {
         ec = -1;
         _LOG_ERROR_ERRNO(root_logger, "%s: %s", errno, "socket");
         goto EXIT;
@@ -139,7 +143,7 @@ int start_server(const struct config *conf) {
         goto EXIT;
     }
 
-    if (bind(srv_fd, (SA *)&srv_addr, sizeof(srv_addr)) == -1) {
+    if (bind(srv_fd, (SA *) &srv_addr, sizeof(srv_addr)) == -1) {
         ec = -1;
         _LOG_ERROR_ERRNO(root_logger, "%s: %s", errno, "bind");
         goto EXIT;

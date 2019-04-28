@@ -1,0 +1,3 @@
+[submodule "lib/c_procs"]
+	path = lib/c_procs
+	url = ssh://git@github.com/msaf1980/c_procs

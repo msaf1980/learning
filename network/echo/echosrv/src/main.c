@@ -22,7 +22,7 @@
 
 #define BUFSIZE 4096
 
-int running = 1;
+short running = 1;
 
 unsigned long int connected = 0; /* number of connections */
 int worker = 0;                  /* set to 1 in worker process */
@@ -37,19 +37,34 @@ struct config {
 int server_session(int sess_fd, const char *ip, const u_short port,
                    const struct config *conf) {
     char buf[BUFSIZE];
-    strcpy(buf, "Hi there!\n");
-    ssize_t len = strlen(buf);
-    for (int i = 0; i < 5; i++) {
-        if (send(sess_fd, buf, len, MSG_NOSIGNAL) == -1) {
+    size_t len = strlen(buf) - 1;
+    size_t r, s;
+    struct timeval tv;
+    tv.tv_sec = 120;
+    tv.tv_usec = 0;
+    set_keepalive(sess_fd);
+
+    set_send_timeout(sess_fd, &tv);
+    set_recv_timeout(sess_fd, &tv);
+
+    while (running) {
+        r = recv(sess_fd, buf, len, MSG_NOSIGNAL);
+        if (r == -1)
+            break;
+        buf[r] = '\0';
+        if (strcmp(buf, "quit\r\n") == 0 || strcmp(buf, "quit\n") == 0)
+            break;
+        s = send(sess_fd, buf, r, MSG_NOSIGNAL);
+        if (s == -1)
+            break;
+    }
+
+    /*
             _LOG_ERROR_ERRNO(root_logger,
                              "send on client connection from %s:%d: %s", errno,
-                             ip, port);
-            break;
-        }
-        sleep(conf->delay);
     }
-    /* _LOG_INFO(root_logger, "close client connection from %s:%d", ip, port);
-     */
+    */
+    _LOG_INFO(root_logger, "close client connection from %s:%d", ip, port);
     close(sess_fd);
 }
 
