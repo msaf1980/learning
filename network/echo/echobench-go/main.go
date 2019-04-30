@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	cb "github.com/msaf1980/cyclicbarrier"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -130,6 +131,16 @@ func parseArgs() (Config, error) {
 	return config, nil
 }
 
+func DumpConfig(w io.Writer, config Config) {
+	fmt.Fprintf(w, "#duration: %s\n", config.Duration)
+	fmt.Fprintf(w, "#workers: %d\n", config.Workers)
+	fmt.Fprintf(w, "#connections: %d\n", config.Connections)
+	fmt.Fprintf(w, "#send: %d per connection\n", config.Send)
+	fmt.Fprintf(w, "#delay: %s\n", config.Delay)
+	fmt.Fprintf(w, "#connect timeout: %s\n", config.ConTimeout)
+	fmt.Fprintf(w, "#send/recv timeout: %s\n", config.Timeout)
+}
+
 func main() {
 	config, error := parseArgs()
 	if error != nil {
@@ -151,6 +162,7 @@ func main() {
 	conns := make([]ConnStat, config.Connections)
 
 	defer func() {
+		fmt.Fprintf(bwstat, "#%s\n", time.Now().Format(time.RFC3339))
 		bwstat.Flush()
 		fstat.Close()
 		for i := 0; i < len(conns); i++ {
@@ -175,6 +187,8 @@ func main() {
 	}
 	timer_duration := time.NewTimer(config.Duration)
 	b.Await()
+	fmt.Fprintf(bwstat, "#%s\n", time.Now().Format(time.RFC3339))
+	DumpConfig(bwstat, config)
 	log.Printf("Starting workers: %d\n", config.Workers)
 LOOP:
 	for workers > 0 {
@@ -194,10 +208,10 @@ LOOP:
 			} else {
 				// Log format
 				// epochtimestamp testhostname proto host:port operation status duration_ms size
-				bwstat.WriteString(fmt.Sprintf("%d\t%s\t%s\t%s\t%s\t%s%d%d\n",
+				fmt.Fprintf(bwstat, "%d\t%s\t%s\t%s\t%s\t%s%d%d\n",
 					r.Timestamp, hostname,
 					r.Proto, config.Addr, r.Operation, r.Status,
-					r.Duration.Nanoseconds()/1000000, r.Size))
+					r.Duration.Nanoseconds()/1000000, r.Size)
 			}
 		}
 	}
