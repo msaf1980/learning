@@ -81,8 +81,8 @@ func parseArgs() (Config, error) {
 	flag.StringVar(&delay, "delay", "0", "delay beetween send messages")
 	flag.StringVar(&duration, "duration", "60s", "test duration")
 
-	flag.StringVar(&conTimeout, "c", "100ms", "connect timeout")
-	flag.StringVar(&timeout, "t", "100ms", "send/recv timeout")
+	flag.StringVar(&conTimeout, "c", "200ms", "connect timeout")
+	flag.StringVar(&timeout, "t", "200ms", "send/recv timeout")
 
 	flag.BoolVar(&config.Verbose, "verbose", false, "verbose")
 	flag.StringVar(&config.Stat, "stat", "", "stat file")
@@ -92,11 +92,12 @@ func parseArgs() (Config, error) {
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	if config.Stat == "" {
-		return config, fmt.Errorf("Set stat file")
-	}
 	if port < 1 {
 		return config, fmt.Errorf("Invalid port value: %d", port)
+	}
+	config.Addr = fmt.Sprintf("%s:%d", host, port)
+	if config.Stat == "" {
+		return config, fmt.Errorf("Set stat file")
 	}
 	if config.Workers < 1 {
 		return config, fmt.Errorf("Invalid workers value: %d", config.Workers)
@@ -133,12 +134,15 @@ func parseArgs() (Config, error) {
 
 func DumpConfig(w io.Writer, config Config) {
 	fmt.Fprintf(w, "#duration: %s\n", config.Duration)
+	fmt.Fprintf(w, "#address: %s\n", config.Addr)
 	fmt.Fprintf(w, "#workers: %d\n", config.Workers)
 	fmt.Fprintf(w, "#connections: %d\n", config.Connections)
 	fmt.Fprintf(w, "#send: %d per connection\n", config.Send)
 	fmt.Fprintf(w, "#delay: %s\n", config.Delay)
 	fmt.Fprintf(w, "#connect timeout: %s\n", config.ConTimeout)
 	fmt.Fprintf(w, "#send/recv timeout: %s\n", config.Timeout)
+
+	fmt.Fprintf(w, "#timestamp(ns)\ttesthost\tproto\tremote_address\toper\tduration(us)\tsize\tstatus\n")
 }
 
 func main() {
@@ -157,9 +161,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	bwstat := bufio.NewWriter(fstat)
-
-	conns := make([]ConnStat, config.Connections)
+	bwstat := bufio.NewWriterSize(fstat, 65536)
+	DumpConfig(bwstat, config)
+	bwstat.Flush()
 
 	defer func() {
 		fmt.Fprintf(bwstat, "#%s\n", time.Now().Format(time.RFC3339))
@@ -172,6 +176,8 @@ func main() {
 		}
 		log.Println("Shutdown")
 	}()
+
+	conns = make([]ConnStat, config.Connections)
 
 	hostname, _ := os.Hostname()
 
@@ -188,8 +194,7 @@ func main() {
 	timer_duration := time.NewTimer(config.Duration)
 	b.Await()
 	fmt.Fprintf(bwstat, "#%s\n", time.Now().Format(time.RFC3339))
-	DumpConfig(bwstat, config)
-	log.Printf("Starting workers: %d\n", config.Workers)
+	log.Printf("Starting %d workers, duration %s\n", config.Workers, config.Duration)
 LOOP:
 	for workers > 0 {
 		select {
@@ -208,10 +213,11 @@ LOOP:
 			} else {
 				// Log format
 				// epochtimestamp testhostname proto host:port operation status duration_ms size
-				fmt.Fprintf(bwstat, "%d\t%s\t%s\t%s\t%s\t%s%d%d\n",
-					r.Timestamp, hostname,
-					r.Proto, config.Addr, r.Operation, r.Status,
-					r.Duration.Nanoseconds()/1000000, r.Size)
+				fmt.Fprintf(bwstat, "%d\t%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
+					r.Timestamp.UnixNano()/1000000, hostname,
+					r.Proto, config.Addr, r.Operation,
+					r.Duration.Nanoseconds()/1000, r.Size,
+					r.Status)
 			}
 		}
 	}

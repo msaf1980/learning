@@ -54,13 +54,14 @@ int server_session(int sess_fd, const char *ip, const u_short port,
 
     while (running) {
         r = recv(sess_fd, buf, len, MSG_NOSIGNAL);
-        if (r == -1)
+        /* if (r = -1) */
+        if (r <= 0)
             break;
         buf[r] = '\0';
         if (strcmp(buf, "quit\r\n") == 0 || strcmp(buf, "quit\n") == 0)
             break;
         s = send(sess_fd, buf, r, MSG_NOSIGNAL);
-        if (s == -1)
+        if (s <= 0)
             break;
     }
 

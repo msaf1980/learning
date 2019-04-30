@@ -1,8 +1,11 @@
 package main
 
 import (
-	//"fmt"
+	"fmt"
+	"io"
 	"log"
+	"net"
+	"strings"
 	"time"
 )
 
@@ -20,16 +23,41 @@ func (p Proto) String() string {
 type Status int
 
 const (
-	Success  Status = iota
-	Timeout         // Connectiom timeout
-	ConReset        // Connection reset
-	ConLost         // Lost connection during send/recv
-	OtherError
-	Ended
+	NetSuccess    Status = iota
+	NetConTimeout        // Connectiom timeout
+	NetConRefused        // Connection refused
+	NetAddrLookup        // Address lookup
+	NetConEOF            // Connection closed
+	OtherError           // Unparsed error
+	Ended                // Set when worker go to shutdown
 )
 
 func (s Status) String() string {
-	return [...]string{"Success", "Timeout", "Connection reset", "Connection lost", "Other error"}[s]
+	return [...]string{"SUCCESS", "TIMEOUT", "REFUSED", "ERRLOOKUP", "EOF", "ERROTHER", "ENDED"}[s]
+}
+
+func GetNetError(err error) Status {
+	if err == nil {
+		return NetSuccess
+	}
+	if err == io.EOF {
+		return NetConEOF
+	}
+	netErr, ok := err.(net.Error)
+	if ok {
+		if netErr.Timeout() {
+			return NetConTimeout
+		} else if strings.Contains(err.Error(), " lookup ") {
+			return NetAddrLookup
+		} else if strings.HasSuffix(err.Error(), ": connection refused") {
+			return NetConRefused
+		} else if strings.HasSuffix(err.Error(), ": broken pipe") ||
+			strings.HasSuffix(err.Error(), ": connection reset by peer") ||
+			strings.HasSuffix(err.Error(), "EOF") {
+			return NetConEOF
+		}
+	}
+	return OtherError
 }
 
 type Operation int
@@ -47,12 +75,12 @@ func (o Operation) String() string {
 
 type Result struct {
 	Id        int
-	Timestamp int32
+	Timestamp time.Time
 	Con       int
 	Proto     Proto
 	Operation Operation
 	Duration  time.Duration // duration
-	Size      int64
+	Size      int
 	Status    Status
 }
 
@@ -70,7 +98,8 @@ func TcpWorker(id int, config Config, out chan<- Result) {
 		ch <- *r
 	}(out)
 
-	//metricPrefix := fmt.Sprintf("Hello from %d\n", config.MetricPrefix, id)
+	message := fmt.Sprintf("Hello from %d\n", id)
+	bytes := []byte(message)
 	count := config.Connections / config.Workers
 	if config.Connections%config.Workers > 0 {
 		count++
@@ -80,25 +109,73 @@ func TcpWorker(id int, config Config, out chan<- Result) {
 	if end > config.Connections {
 		end = config.Connections
 	}
-	//var pos := start
+	pos := start
 	b.Await()
 	if config.Verbose {
 		log.Printf("Started TCP worker %d\n", id)
 	}
 	for running {
-		/*
-			if pos == end {
-				pos = start
+		if pos == end {
+			pos = start
+		}
+		if conns[pos].Connected && conns[pos].Count >= config.Send {
+			// sended messages per connection reached, close
+			conns[pos].Conn.Close()
+			conns[pos].Connected = false
+			conns[pos].Count = 0
+		}
+		if !conns[pos].Connected {
+			var err error
+			r.Operation = Connect
+			r.Size = 0
+			r.Timestamp = time.Now()
+			conns[pos].Conn, err = net.DialTimeout("tcp", config.Addr, config.ConTimeout)
+			r.Duration = time.Since(r.Timestamp)
+			r.Status = GetNetError(err)
+			if err == nil {
+				conns[pos].Connected = true
+				conns[pos].Count = 0
 			}
-				SEEK:
-					for i := pos; i < end; i++ {
-						if ! conns[i].Connected {
-							break
-						}
+			if config.Verbose && r.Status == OtherError {
+				log.Print(err.Error())
+			}
+			out <- *r
+		}
+		if conns[pos].Connected {
+			r.Operation = Send
+			r.Timestamp = time.Now()
+			conns[pos].Conn.SetDeadline(r.Timestamp.Add(config.Timeout))
+			n, err := conns[pos].Conn.Write(bytes)
+			r.Duration = time.Since(r.Timestamp)
+			r.Size = n
+			r.Status = GetNetError(err)
+			out <- *r
+			if err != nil {
+				conns[pos].Connected = false
+				conns[pos].Conn.Close()
+				if config.Verbose && r.Status == OtherError {
+					log.Print(err.Error())
+				}
+			} else {
+				conns[pos].Count++
+				r.Operation = Recv
+				r.Timestamp = time.Now()
+				n, err := conns[pos].Conn.Read(bytes)
+				r.Duration = time.Since(r.Timestamp)
+				r.Size = n
+				r.Status = GetNetError(err)
+				if err != nil {
+					conns[pos].Connected = false
+					conns[pos].Conn.Close()
+					if config.Verbose && r.Status == OtherError {
+						log.Print(err.Error())
 					}
-		*/
-		r.Timestamp = int32(time.Now().Unix())
-		time.Sleep(time.Second)
+				}
+				out <- *r
+			}
+		}
+		time.Sleep(config.Delay)
+		pos++
 	}
 	if config.Verbose {
 		log.Printf("Shutdown TCP worker %d\n", id)
