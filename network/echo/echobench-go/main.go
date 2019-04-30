@@ -146,9 +146,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	bwstat := bufio.NewWriter(fstat)
+
 	conns := make([]ConnStat, config.Connections)
 
 	defer func() {
+		bwstat.Flush()
 		fstat.Close()
 		for i := 0; i < len(conns); i++ {
 			if conns[i].Connected {
@@ -157,8 +160,6 @@ func main() {
 		}
 		log.Println("Shutdown")
 	}()
-
-	bwstat := bufio.NewWriter(fstat)
 
 	hostname, _ := os.Hostname()
 
@@ -200,6 +201,5 @@ LOOP:
 			}
 		}
 	}
-	bwstat.Flush()
 
 }
