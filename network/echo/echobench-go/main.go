@@ -37,6 +37,7 @@ type Config struct {
 
 	Addr    string
 	Stat    string // statfile
+	Size    int    // message size
 	Verbose bool
 }
 
@@ -82,10 +83,12 @@ func parseArgs() (Config, error) {
 	flag.StringVar(&duration, "duration", "60s", "test duration")
 
 	flag.StringVar(&conTimeout, "c", "200ms", "connect timeout")
-	flag.StringVar(&timeout, "t", "200ms", "send/recv timeout")
+	flag.StringVar(&timeout, "t", "1s", "send/recv timeout")
 
 	flag.BoolVar(&config.Verbose, "verbose", false, "verbose")
 	flag.StringVar(&config.Stat, "stat", "", "stat file")
+
+	flag.IntVar(&config.Size, "size", 512, "message size")
 
 	flag.Parse()
 
@@ -111,6 +114,9 @@ func parseArgs() (Config, error) {
 	}
 	if config.Send < 1 {
 		return config, fmt.Errorf("Invalid send value: %d", config.Send)
+	}
+	if config.Size < 1 {
+		return config, fmt.Errorf("Invalid size value: %d", config.Size)
 	}
 	config.Delay, err = ParseDurationMin(delay, 0, "delay")
 	if err != nil {
@@ -142,7 +148,7 @@ func DumpConfig(w io.Writer, config Config) {
 	fmt.Fprintf(w, "#connect timeout: %s\n", config.ConTimeout)
 	fmt.Fprintf(w, "#send/recv timeout: %s\n", config.Timeout)
 
-	fmt.Fprintf(w, "#timestamp(ns)\ttesthost\tproto\tremote_address\toper\tduration(us)\tsize\tstatus\n")
+	fmt.Fprintf(w, "#timestamp(ns)\ttesthost\tsession\tproto\tremote_address\toper\tduration(us)\tsize\tstatus\n")
 }
 
 func main() {
@@ -213,8 +219,8 @@ LOOP:
 			} else {
 				// Log format
 				// epochtimestamp testhostname proto host:port operation status duration_ms size
-				fmt.Fprintf(bwstat, "%d\t%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
-					r.Timestamp.UnixNano()/1000000, hostname,
+				fmt.Fprintf(bwstat, "%d\t%s\t%d\t%s\t%s\t%s\t%d\t%d\t%s\n",
+					r.Timestamp.UnixNano()/1000000, hostname, r.Id,
 					r.Proto, config.Addr, r.Operation,
 					r.Duration.Nanoseconds()/1000, r.Size,
 					r.Status)

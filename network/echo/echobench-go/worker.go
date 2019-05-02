@@ -1,9 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"strings"
 	"time"
@@ -29,11 +29,12 @@ const (
 	NetAddrLookup        // Address lookup
 	NetConEOF            // Connection closed
 	OtherError           // Unparsed error
+	Mismatch             // Result mismatch
 	Ended                // Set when worker go to shutdown
 )
 
 func (s Status) String() string {
-	return [...]string{"SUCCESS", "TIMEOUT", "REFUSED", "ERRLOOKUP", "EOF", "ERROTHER", "ENDED"}[s]
+	return [...]string{"SUCCESS", "TIMEOUT", "REFUSED", "ERRLOOKUP", "EOF", "ERROTHER", "MISMATCH", "ENDED"}[s]
 }
 
 func GetNetError(err error) Status {
@@ -67,14 +68,16 @@ const (
 	Send               //Send
 	Recv               // Recv
 	SendRecv           // Send/Recv summary
+	Close              // Close
 )
 
 func (o Operation) String() string {
-	return [...]string{"CONNECT", "SEND", "RECV", "MSG"}[o]
+	return [...]string{"CONNECT", "SEND", "RECV", "MSG", "CLOSE"}[o]
 }
 
 type Result struct {
 	Id        int
+	Worker    int
 	Timestamp time.Time
 	Con       int
 	Proto     Proto
@@ -84,10 +87,21 @@ type Result struct {
 	Status    Status
 }
 
-func ResultNew(id int, proto Proto) *Result {
+func ResultNew(worker int, proto Proto) *Result {
 	r := new(Result)
+	r.Worker = worker
 	r.Proto = proto
 	return r
+}
+
+const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+func RandBytes(n int) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letterBytes[rand.Int63()%int64(len(letterBytes))]
+	}
+	return b
 }
 
 func TcpWorker(id int, config Config, out chan<- Result) {
@@ -98,8 +112,8 @@ func TcpWorker(id int, config Config, out chan<- Result) {
 		ch <- *r
 	}(out)
 
-	message := fmt.Sprintf("Hello from %d\n", id)
-	bytes := []byte(message)
+	bytes := RandBytes(config.Size)
+	bytes[config.Size-1] = '\n'
 	count := config.Connections / config.Workers
 	if config.Connections%config.Workers > 0 {
 		count++
@@ -118,11 +132,19 @@ func TcpWorker(id int, config Config, out chan<- Result) {
 		if pos == end {
 			pos = start
 		}
+		r.Id = pos
 		if conns[pos].Connected && conns[pos].Count >= config.Send {
 			// sended messages per connection reached, close
+			r.Timestamp = time.Now()
 			conns[pos].Conn.Close()
+			r.Operation = Close
+			r.Size = 0
+			r.Status = NetSuccess
+			r.Id = pos
+			r.Duration = 0
 			conns[pos].Connected = false
 			conns[pos].Count = 0
+			out <- *r
 		}
 		if !conns[pos].Connected {
 			var err error
@@ -158,9 +180,10 @@ func TcpWorker(id int, config Config, out chan<- Result) {
 				}
 			} else {
 				conns[pos].Count++
+				inbytes := make([]byte, len(bytes))
 				r.Operation = Recv
 				r.Timestamp = time.Now()
-				n, err := conns[pos].Conn.Read(bytes)
+				n, err := conns[pos].Conn.Read(inbytes)
 				r.Duration = time.Since(r.Timestamp)
 				r.Size = n
 				r.Status = GetNetError(err)

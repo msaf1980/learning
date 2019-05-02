@@ -25,6 +25,8 @@ struct config {
     int workers;
 };
 
+const char *name = "echosrv";
+
 /* #define BACKLOG 20 */
 #define BACKLOG SOMAXCONN
 
@@ -42,35 +44,39 @@ struct config conf;
 int server_session(int sess_fd, const char *ip, const u_short port,
                    const struct config *conf) {
     char buf[BUFSIZE];
-    size_t len = strlen(buf) - 1;
-    size_t r, s;
+    ssize_t r, s;
+    size_t rsize, wsize;
     struct timeval tv;
-    tv.tv_sec = 120;
+    tv.tv_sec = 60;
     tv.tv_usec = 0;
     set_keepalive(sess_fd);
 
     set_send_timeout(sess_fd, &tv);
     set_recv_timeout(sess_fd, &tv);
+    errno = 0;
 
     while (running) {
-        r = recv(sess_fd, buf, len, MSG_NOSIGNAL);
-        /* if (r = -1) */
-        if (r <= 0)
+        r = recv_try(sess_fd, buf, BUFSIZE - 1, MSG_NOSIGNAL, &rsize, &running, '\n');
+        //_LOG_INFO(root_logger, "read %lu from %s:%d", rsize, ip, port);
+        // if (r == -1)
+        if (r < 1 || running == 0)
             break;
         buf[r] = '\0';
         if (strcmp(buf, "quit\r\n") == 0 || strcmp(buf, "quit\n") == 0)
             break;
-        s = send(sess_fd, buf, r, MSG_NOSIGNAL);
-        if (s <= 0)
+        s = send_try(sess_fd, buf, rsize, MSG_NOSIGNAL, &wsize, &running);
+        //_LOG_INFO(root_logger, "write %d to %s:%d", wsize, ip, port);
+        if (s < 1)
             break;
     }
 
-    /*
-            _LOG_ERROR_ERRNO(root_logger,
-                             "send on client connection from %s:%d: %s", errno,
+    if (errno == EAGAIN) {
+        _LOG_INFO(root_logger, "close client connection from %s:%d (timeout)", ip, port);
+    } else if (errno) {
+        _LOG_ERROR_ERRNO(root_logger, "close client connection from %s:%d: %s", errno, ip, port);
+    } else {
+        _LOG_INFO(root_logger, "close client connection from %s:%d", ip, port);
     }
-    */
-    _LOG_INFO(root_logger, "close client connection from %s:%d", ip, port);
     close(sess_fd);
 }
 
@@ -141,7 +147,6 @@ int start_server(const struct config *conf) {
         goto EXIT;
     }
     set_reuseaddr(srv_fd);
-
 
     srv_addr.sin_family = AF_INET;
     srv_addr.sin_port = htons(conf->port);
@@ -362,7 +367,6 @@ int main(int argc, char *const argv[]) {
     int ec = 0, pid;
     int background = 0;
     int closefds = FD_NOCLOSE;
-    const char *name = "hellosrv";
     conf.ip = NULL;
     conf.port = 1234;
     conf.workers = 2;
