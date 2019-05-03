@@ -1,5 +1,6 @@
 #!/bin/env python
 
+import os
 import sys
 import argparse
 from argparse import RawTextHelpFormatter
@@ -130,11 +131,6 @@ class AggrStat:
                 self.msg_size.append(stat.size)
 
 
-#     def calc_rps(self, stat_count):
-# trange = self.end - self.start
-# for k in stat_count:
-# stat_count[k] = round(100.0 * stat_count[k] / trange, 1)
-
     def calc_avg(self, stat_value):
         # minimum, median, pcnt_95, max
         if len(stat_value) == 0:
@@ -145,6 +141,7 @@ class AggrStat:
         pcnt_95 = percentile(stat_value, 0.95)
         return (minimum, average, pcnt_95, maximum)
 
+
     def process_stat(self):
         self.connect_time.sort()
         self.send_time.sort()
@@ -153,10 +150,7 @@ class AggrStat:
         self.recv_size.sort()
         self.msg_time.sort()
         self.msg_size.sort()
-        #self.calc_rps(self.connect_count)
-        #self.calc_rps(self.send_count)
-        #self.calc_rps(self.recv_count)
-        #self.calc_rps(self.msg_count)
+
 
     def print_stat(self):
         print(self.date_time)
@@ -181,14 +175,15 @@ def relength(stat_count, n, default):
         stat_count.append(default)
 
 
-def add_count_stat(stat, dest, n, duration):
+def add_count_stat(stat, dest, n, duration, multiply=100.0, accuracy=2):
     for k in stat:
         v = dest.get(k)
         if v is None:
             v = []
             dest[k] = v
         relength(v, n, 0)
-        v.append(round(100.0 * stat[k] / duration, 1))
+        v.append(round(multiply * stat[k] / duration, accuracy))
+
 
 def avg_init(stat):
     stat['min'] = []
@@ -196,22 +191,37 @@ def avg_init(stat):
     stat['avg'] = []
     stat['p99'] = []
 
-def add_avg_stat(stat, dest, n):
+
+def add_avg_stat(stat, dest, n, multiply=1.0, accurancy=2):
     if stat is None or len(stat) == 0:
         minimum = 0
         maximum = 0
         average = 0
         pcnt_95 = 0
     else:
-        minimum = stat[0]
-        maximum = stat[-1]
-        average = percentile(stat, 0.5)
-        pcnt_95 = percentile(stat, 0.95)
+        minimum = round(multiply * stat[0], accurancy)
+        maximum = round(multiply * stat[-1], accurancy)
+        average = round(multiply * percentile(stat, 0.5), accurancy)
+        pcnt_95 = round(multiply * percentile(stat, 0.95), accurancy)
 
     dest['min'].append(minimum)
     dest['max'].append(maximum)
     dest['avg'].append(average)
     dest['p99'].append(pcnt_95)
+
+
+def save_stat(fname, name, subname, date_times, stats):
+    filename = "%s.%s.%s.csv" % (fname, name, subname)
+    with open(filename, "w") as f:
+        f.write("time\t\t")
+        for k in stats:
+            f.write("\t%s" % k)
+        f.write("\n")
+        for i in range(len(date_times)):
+            f.write("%s" % date_times[i].strftime("%Y/%m/%d %H:%M:%S"))
+            for k in stats:
+                f.write("\t%s" % stats[k][i])
+            f.write("\n")
 
 
 class CollectStat:
@@ -253,7 +263,8 @@ class CollectStat:
         n = len(self.date_times)
         duration = aggr_stat.end - aggr_stat.start
         if self.connect_exist:
-            add_count_stat(aggr_stat.connect_count, self.connect_count, n, duration)
+            add_count_stat(aggr_stat.connect_count, self.connect_count, n,
+                           duration)
             add_avg_stat(aggr_stat.connect_time, self.connect_time, n)
         if self.send_exist:
             add_count_stat(aggr_stat.send_count, self.send_count, n, duration)
@@ -269,11 +280,6 @@ class CollectStat:
             add_avg_stat(aggr_stat.msg_size, self.msg_size, n)
 
         self.date_times.append(aggr_stat.date_time)
-            #self.connect_count.add(aggr_stat.connect_count)
-        # print(aggr_stat.connect_count)
-        #elif self.connect_exist:
-        #    self.connect_count.append(0)
-
 
 
 def parse_cmdline():
@@ -317,7 +323,6 @@ def parse_cmdline():
     return parser.parse_args()
 
 
-
 def main():
     try:
         args = parse_cmdline()
@@ -353,6 +358,13 @@ def main():
     aggr_stat = None
     operations = set(args.operations)
     c_stat = CollectStat(operations)
+
+    fname, fext = os.path.splitext(args.stat)
+    if args.dir is not None:
+        if os.path.exists(args.dir):
+            sys.exit("%s already exist" % args.dir)
+        fname = os.path.join(args.dir, os.path.basename(fname))
+        os.mkdir(args.dir)
 
     with open(args.stat, "r") as f:
         n = 0
@@ -402,52 +414,46 @@ def main():
     if c_stat.connect_exist:
         for k in c_stat.connect_count:
             c_stat.connect_count[k] = np.array(c_stat.connect_count[k])
+        save_stat(fname, "CONNECT", "RPS", c_stat.date_times,
+                  c_stat.connect_count)
         for k in c_stat.connect_time:
             c_stat.connect_time[k] = np.array(c_stat.connect_time[k])
+        save_stat(fname, "CONNECT", "TIME", c_stat.date_times,
+                  c_stat.connect_time)
 
     if c_stat.send_exist:
         for k in c_stat.send_count:
             c_stat.send_count[k] = np.array(c_stat.send_count[k])
+        save_stat(fname, "SEND", "RPS", c_stat.date_times, c_stat.send_count)
         for k in c_stat.send_time:
             c_stat.send_time[k] = np.array(c_stat.send_time[k])
+        save_stat(fname, "SEND", "TIME", c_stat.date_times, c_stat.send_time)
         for k in c_stat.send_size:
             c_stat.send_size[k] = np.array(c_stat.send_size[k])
+        save_stat(fname, "SEND", "SIZE", c_stat.date_times, c_stat.send_size)
 
     if c_stat.recv_exist:
         for k in c_stat.recv_count:
             c_stat.recv_count[k] = np.array(c_stat.recv_count[k])
+        save_stat(fname, "RECV", "RPS", c_stat.date_times, c_stat.recv_count)
         for k in c_stat.recv_time:
             c_stat.recv_time[k] = np.array(c_stat.recv_time[k])
+        save_stat(fname, "RECV", "TIME", c_stat.date_times, c_stat.recv_time)
         for k in c_stat.recv_size:
             c_stat.recv_size[k] = np.array(c_stat.recv_size[k])
+        save_stat(fname, "RECV", "SIZE", c_stat.date_times, c_stat.recv_size)
 
     if c_stat.msg_exist:
         for k in c_stat.msg_count:
             c_stat.msg_count[k] = np.array(c_stat.msg_count[k])
+        save_stat(fname, "MSG", "RPS", c_stat.date_times, c_stat.msg_count)
         for k in c_stat.msg_time:
             c_stat.msg_time[k] = np.array(c_stat.msg_time[k])
+        save_stat(fname, "MSG", "TIME", c_stat.date_times, c_stat.msg_time)
         for k in c_stat.msg_size:
             c_stat.msg_size[k] = np.array(c_stat.msg_size[k])
+        save_stat(fname, "MSG", "SIZE", c_stat.date_times, c_stat.msg_size)
 
-   # for k in send_count:
-    # send_count[k] = np.array(send_count[k])
-    # for k in recv_count:
-    # recv_count[k] = np.array(recv_count[k])
-
-    print(len(c_stat.date_times), c_stat.date_times)
-
-    print("CONNECT", len(c_stat.connect_count), c_stat.connect_count)
-    print("CONNECT time", c_stat.connect_time)
-    print("SEND", len(c_stat.send_count), c_stat.send_count)
-    print("SEND time", c_stat.send_time)
-    print("RECV", len(c_stat.recv_count), c_stat.recv_count)
-    print("RECV time", c_stat.recv_time)
-
-#     print(len(connect_count), connect_count)
-# print(len(send_count), send_count)
-# print(len(recv_count), recv_count)
-
-# graph_rate("connect", aggr_stat)
 
 # aggr_stat = AggrStat(
 #    round_time(datetime.datetime.fromtimestamp(stats[0].timestamp / 1000),
