@@ -9,7 +9,14 @@ import datetime
 from datetime import timedelta
 
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import matplotlib.axes as axes
+
 import numpy as np
+
+figsize = (16.00, 6.00)
+tsfmts = '%m-%d %H:%M'
+tsfmt = mdates.DateFormatter(tsfmts)
 
 
 def round_time(dt=None, delta=datetime.timedelta(minutes=1), to='average'):
@@ -54,6 +61,18 @@ def percentile(N, percent, key=lambda x: x):
     d0 = key(N[int(f)]) * (c - k)
     d1 = key(N[int(c)]) * (k - f)
     return d0 + d1
+
+
+def np_max_val_indx(a, ts_indx):
+    m = 0
+    for i in ts_indx:
+        if a[i] is None:
+            continue
+        m1 = np.max(a[i])
+        if m1 > m:
+            m = m1
+
+    return m
 
 
 class Stat:
@@ -130,7 +149,6 @@ class AggrStat:
                 self.msg_time.append(stat.duration)
                 self.msg_size.append(stat.size)
 
-
     def calc_avg(self, stat_value):
         # minimum, median, pcnt_95, max
         if len(stat_value) == 0:
@@ -141,7 +159,6 @@ class AggrStat:
         pcnt_95 = percentile(stat_value, 0.95)
         return (minimum, average, pcnt_95, maximum)
 
-
     def process_stat(self):
         self.connect_time.sort()
         self.send_time.sort()
@@ -150,7 +167,6 @@ class AggrStat:
         self.recv_size.sort()
         self.msg_time.sort()
         self.msg_size.sort()
-
 
     def print_stat(self):
         print(self.date_time)
@@ -224,6 +240,46 @@ def save_stat(fname, name, subname, date_times, stats):
             f.write("\n")
 
 
+def save_graph(fname, name, subname, date_times, stats, unit=None):
+    filename = "%s.%s.%s.png" % (fname, name, subname)
+    n = len(date_times)
+    if n == 0:
+        return
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    if unit is None:
+        plt.title("%s %s" % (name, subname))
+    else:
+        plt.title("%s %s (%s)" % (name, subname, unit))
+
+    ax.set_xlabel("Time (%s)" % tsfmts)
+    ax.xaxis.set_major_formatter(tsfmt)
+    plt.xticks(rotation='vertical')
+
+    prop_cycle = plt.rcParams['axes.prop_cycle']
+    colors = prop_cycle.by_key()['color']
+    cc = iter(colors)
+    for k in stats:
+        ax.plot(date_times, stats[k], next(cc), label=k)
+
+    plt.grid()
+    ax.legend(loc='upper left', frameon=False)
+    plt.savefig(filename, bbox_inches='tight', dpi=100, figsize=figsize)
+
+
+#     with open(filename, "w") as f:
+# f.write("time\t\t")
+# for k in stats:
+# f.write("\t%s" % k)
+# f.write("\n")
+# for i in range(len(date_times)):
+# f.write("%s" % date_times[i].strftime("%Y/%m/%d %H:%M:%S"))
+# for k in stats:
+# f.write("\t%s" % stats[k][i])
+# f.write("\n")
+
+
 class CollectStat:
     def __init__(self, operations):
         self.connect_exist = True if "CONNECT" in operations else False
@@ -265,18 +321,18 @@ class CollectStat:
         if self.connect_exist:
             add_count_stat(aggr_stat.connect_count, self.connect_count, n,
                            duration)
-            add_avg_stat(aggr_stat.connect_time, self.connect_time, n)
+            add_avg_stat(aggr_stat.connect_time, self.connect_time, n, 0.001)
         if self.send_exist:
             add_count_stat(aggr_stat.send_count, self.send_count, n, duration)
-            add_avg_stat(aggr_stat.send_time, self.send_time, n)
+            add_avg_stat(aggr_stat.send_time, self.send_time, n, 0.001)
             add_avg_stat(aggr_stat.send_size, self.send_size, n)
         if self.recv_exist:
             add_count_stat(aggr_stat.recv_count, self.recv_count, n, duration)
-            add_avg_stat(aggr_stat.recv_time, self.recv_time, n)
+            add_avg_stat(aggr_stat.recv_time, self.recv_time, n, 0.001)
             add_avg_stat(aggr_stat.recv_size, self.recv_size, n)
         if self.msg_exist:
             add_count_stat(aggr_stat.msg_count, self.msg_count, n, duration)
-            add_avg_stat(aggr_stat.msg_time, self.msg_time, n)
+            add_avg_stat(aggr_stat.msg_time, self.msg_time, n, 0.001)
             add_avg_stat(aggr_stat.msg_size, self.msg_size, n)
 
         self.date_times.append(aggr_stat.date_time)
@@ -416,18 +472,25 @@ def main():
             c_stat.connect_count[k] = np.array(c_stat.connect_count[k])
         save_stat(fname, "CONNECT", "RPS", c_stat.date_times,
                   c_stat.connect_count)
+        save_graph(fname, "CONNECT", "RPS", c_stat.date_times,
+                   c_stat.connect_count)
         for k in c_stat.connect_time:
             c_stat.connect_time[k] = np.array(c_stat.connect_time[k])
         save_stat(fname, "CONNECT", "TIME", c_stat.date_times,
                   c_stat.connect_time)
+        save_graph(fname, "CONNECT", "TIME", c_stat.date_times,
+                   c_stat.connect_time, "ms")
 
     if c_stat.send_exist:
         for k in c_stat.send_count:
             c_stat.send_count[k] = np.array(c_stat.send_count[k])
         save_stat(fname, "SEND", "RPS", c_stat.date_times, c_stat.send_count)
+        save_graph(fname, "SEND", "RPS", c_stat.date_times, c_stat.send_count)
         for k in c_stat.send_time:
             c_stat.send_time[k] = np.array(c_stat.send_time[k])
         save_stat(fname, "SEND", "TIME", c_stat.date_times, c_stat.send_time)
+        save_graph(fname, "SEND", "TIME", c_stat.date_times,
+                   c_stat.send_time, "ms")
         for k in c_stat.send_size:
             c_stat.send_size[k] = np.array(c_stat.send_size[k])
         save_stat(fname, "SEND", "SIZE", c_stat.date_times, c_stat.send_size)
@@ -436,9 +499,12 @@ def main():
         for k in c_stat.recv_count:
             c_stat.recv_count[k] = np.array(c_stat.recv_count[k])
         save_stat(fname, "RECV", "RPS", c_stat.date_times, c_stat.recv_count)
+        save_graph(fname, "RECV", "RPS", c_stat.date_times, c_stat.recv_count)
         for k in c_stat.recv_time:
             c_stat.recv_time[k] = np.array(c_stat.recv_time[k])
         save_stat(fname, "RECV", "TIME", c_stat.date_times, c_stat.recv_time)
+        save_graph(fname, "RECV", "TIME", c_stat.date_times,
+                   c_stat.recv_time, "ms")
         for k in c_stat.recv_size:
             c_stat.recv_size[k] = np.array(c_stat.recv_size[k])
         save_stat(fname, "RECV", "SIZE", c_stat.date_times, c_stat.recv_size)
@@ -447,9 +513,12 @@ def main():
         for k in c_stat.msg_count:
             c_stat.msg_count[k] = np.array(c_stat.msg_count[k])
         save_stat(fname, "MSG", "RPS", c_stat.date_times, c_stat.msg_count)
+        save_graph(fname, "MSG", "RPS", c_stat.date_times, c_stat.msg_count)
         for k in c_stat.msg_time:
             c_stat.msg_time[k] = np.array(c_stat.msg_time[k])
         save_stat(fname, "MSG", "TIME", c_stat.date_times, c_stat.msg_time)
+        save_graph(fname, "MSG", "TIME", c_stat.date_times,
+                   c_stat.msg_time, "ms")
         for k in c_stat.msg_size:
             c_stat.msg_size[k] = np.array(c_stat.msg_size[k])
         save_stat(fname, "MSG", "SIZE", c_stat.date_times, c_stat.msg_size)
