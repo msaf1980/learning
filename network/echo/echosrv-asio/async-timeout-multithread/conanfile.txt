@@ -1,0 +1,9 @@
+[requires]
+boost/1.69.0@conan/stable
+
+[options]
+Boost:shared=False
+log4cpp:shared=False
+
+[generators]
+cmake

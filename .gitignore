@@ -3,12 +3,15 @@
 
 # Build dir
 _*
+bin
+lib
 target
+build
 
 ### Vim
-*.swp
+.*.swp
 ### VS Code
-.vscode 
+.vscode
 ########################
 ### C
 # Prerequisites
@@ -53,10 +56,22 @@ CMakeScripts
 Testing
 cmake_install.cmake
 install_manifest.txt
-CTestTestfile.cmake 
+CTestTestfile.cmake
+Makefile
+
+cotire
+*_cotire.cmake
+
+*_pch_dephelp.cxx
+
+########################
+conanbuild*
+conaninfo.txt
+graph_info.json
 
 ########################
 compile_commands.json
+*.plist
 ########################
 ### Tags
 tags
