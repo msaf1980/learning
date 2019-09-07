@@ -7,7 +7,19 @@
 #include <memory>
 #include <utility>
 
+#include <signal.h>
+
 #include <echosrv.hpp>
+
+int running = 1;
+
+void handler(const boost::system::error_code &error, int signal_number) {
+	// Not safe to use stream here..a
+	if (signal_number == SIGKILL || signal_number == SIGINT) {
+		std::cout << "Stopping" << std::endl;
+		running = 0;
+	}
+}
 
 int main(int argc, char *argv[]) {
 	try {
@@ -16,9 +28,16 @@ int main(int argc, char *argv[]) {
 			return 1;
 		}
 
-		boost::asio::io_context io_context;
+		boost::asio::io_context        io_context;
 		boost::asio::io_service::work *work;
-		boost::thread_group threads;
+		boost::thread_group            threads;
+
+		// Wait for signals indicating time to shut down.
+		boost::asio::signal_set signals(io_context);
+		signals.add(SIGINT);
+		signals.add(SIGTERM);
+
+		signals.async_wait(handler);
 
 		Server s(io_context, std::atoi(argv[1]));
 
@@ -28,8 +47,11 @@ int main(int argc, char *argv[]) {
 			    boost::bind(&boost::asio::io_context::run, &io_context));
 		}
 
-		boost::this_thread::sleep(boost::posix_time::seconds(120));
-		io_context.run();
+		while (running) {
+			boost::this_thread::sleep(boost::posix_time::milliseconds(500));
+		}
+		io_context.stop();
+		threads.join_all();
 	} catch (std::exception &e) {
 		std::cerr << "Exception: " << e.what() << "\n";
 	}

@@ -12,10 +12,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <daemonutils.h>
-#include <logutils/syslogutils.h>
-#include <netutils/netutils.h>
-#include <strutils.h>
+#include <c_procs/daemonutils.h>
+#include <c_procs/logutils/syslogutils.h>
+#include <c_procs/netutils/netutils.h>
+#include <c_procs/strutils.h>
 
 struct config {
     char *ip;
