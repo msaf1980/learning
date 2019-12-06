@@ -82,6 +82,32 @@ int server_session(int sess_fd, const char *ip, const u_short port,
 	close(sess_fd);
 }
 
+/**
+ * This function will be called by libevent when there is a connection
+ * ready to be accepted.
+ */
+void on_accept(int listenfd, short ev, void *arg) {
+	int client_fd;
+	struct sockaddr_in client_addr;
+	socklen_t client_len = sizeof(client_addr);
+
+	client_fd = accept(listenfd, (struct sockaddr *)&client_addr, &client_len);
+	if (client_fd < 0) {
+		_LOG_ERROR_ERRNO(root_logger, "%s on socket %d: %s", errno, "accept",
+		                 listenfd);
+		return;
+	}
+
+	/* Set the client socket to non-blocking mode. */
+	if (set_nonblock(client_fd) < 0) {
+		warn("failed to set client socket to non-blocking");
+		close(client_fd);
+		return;
+	}
+
+
+}
+
 int accept_loop(int listenfd, const struct config *conf) {
 	int ec = 0;
 	SA_IN client_addr;
@@ -96,7 +122,7 @@ int accept_loop(int listenfd, const struct config *conf) {
 		ec = 1;
 		goto EXIT;
 	}
-	event_set(&ev_accept, listenfd, EV_READ|EV_PERSIST, on_accept, (void *)&workqueue);
+	event_set(&ev_accept, listenfd, EV_READ|EV_PERSIST, on_accept, NULL);
 	event_base_set(evbase_accept, &ev_accept);
 	event_add(&ev_accept, NULL);
 EXIT:
